@@ -11,6 +11,30 @@
             this.weight = 80;           // 體重 (kg)
             this.controlRange = 0.6;    // 可控球的距離範圍 (m)
             this.accuracy = 0.5;        // 出球準確度
+
+            // --- 上場時分配位置 (預設自己隊球門 Zone14 附近防守半場) ---
+            this.assignedPosition = (this.team === 'red') ? { x: -30, z: 0 } : { x: 30, z: 0 };
+        }
+
+        // 輔助函式：移動回分配位置
+        moveToAssignedPosition(playerObj, dt) {
+            // 依據目前 team 動態確認分配位置 (防範動態換隊)
+            const targetX = (this.team === 'red') ? -30 : 30;
+            const targetZ = 0;
+
+            const dx = targetX - playerObj.position.x;
+            const dz = targetZ - playerObj.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+
+            if (dist > 1.0) {
+                const targetAngle = Math.atan2(dx, dz);
+                this.turnTowards(playerObj, targetAngle, 4.0, dt);
+                const moveStep = this.runSpeed * 0.7 * dt;
+                playerObj.position.x += (dx / dist) * Math.min(moveStep, dist);
+                playerObj.position.z += (dz / dist) * Math.min(moveStep, dist);
+            }
+            // 回防時緩慢恢復體力
+            playerObj.stamina = Math.min(this.maxStamina, playerObj.stamina + 2.0 * dt);
         }
 
         update(dt, playerObj, ball, playersList, goals) {
@@ -38,36 +62,78 @@
             // 檢查是否在喘息中
             let isResting = this.updateStaminaAndRest(playerObj, dt, false);
 
+            // 取得全域比賽狀態
+            const matchState = window.matchState || { canKick: true, restarted: true, possession: 'blue' };
+
             if (isResting) {
                 statusText = `🥵 體能耗盡喘息中 (${playerObj.restTimer.toFixed(1)}s)`;
                 statusColor = "#f44336";
             } else {
-                if (isBallInFOV) {
-                    // 3. 追球時全力衝刺（持續消耗體力，直到體力耗盡原地喘息）
-                    statusText = "👁️ 全力衝刺追球中";
-                    statusColor = "#4caf50";
-                    isRunning = true;
+                // --- 開球與球權邏輯判斷 ---
+                if (matchState.restarted) {
+                    // 1. 已重新開球 = true 則正常爭球
+                    if (isBallInFOV) {
+                        statusText = "👁️ 全力衝刺追球中";
+                        statusColor = "#4caf50";
+                        isRunning = true;
+                        this.updateStaminaAndRest(playerObj, dt, true);
 
-                    // 觸發扣血機制
-                    this.updateStaminaAndRest(playerObj, dt, true);
+                        const targetAngleToBall = Math.atan2(toBallX, toBallZ);
+                        playerObj.rotation.y = targetAngleToBall;
 
-                    const targetAngleToBall = Math.atan2(toBallX, toBallZ);
-                    playerObj.rotation.y = targetAngleToBall;
-
-                    if (distToBallXZ > 0.3) {
-                        const moveStep = this.runSpeed * dt;
-                        playerObj.position.x += (toBallX / distToBallXZ) * Math.min(moveStep, distToBallXZ);
-                        playerObj.position.z += (toBallZ / distToBallXZ) * Math.min(moveStep, distToBallXZ);
+                        if (distToBallXZ > 0.3) {
+                            const moveStep = this.runSpeed * dt;
+                            playerObj.position.x += (toBallX / distToBallXZ) * Math.min(moveStep, distToBallXZ);
+                            playerObj.position.z += (toBallZ / distToBallXZ) * Math.min(moveStep, distToBallXZ);
+                        }
+                    } else {
+                        statusText = "🔄 視野未見球，向右轉頭尋找";
+                        statusColor = "#ff9800";
+                        const turnSpeed = 3.5;
+                        playerObj.rotation.y -= turnSpeed * dt;
+                        playerObj.stamina = Math.min(this.maxStamina, playerObj.stamina + 2.0 * dt);
                     }
                 } else {
-                    // 1. 視野中沒看到球，就會向右轉頭來尋找球
-                    statusText = "🔄 視野未見球，向右轉頭尋找";
-                    statusColor = "#ff9800";
-                    const turnSpeed = 3.5;
-                    playerObj.rotation.y -= turnSpeed * dt; // 向右轉頭
+                    // 2. 已重新開球 = false
+                    const isMyTeamPossession = (this.team === matchState.possession);
 
-                    // 原地緩慢恢復體力
-                    playerObj.stamina = Math.min(this.maxStamina, playerObj.stamina + 2.0 * dt);
+                    if (!isMyTeamPossession) {
+                        // 球權不是自己隊 -> 往自己「上場時分配位置」移動
+                        statusText = "🛡️ 等待對手開球，回防中";
+                        statusColor = "#9c27b0";
+                        this.moveToAssignedPosition(playerObj, dt);
+                    } else {
+                        // 球權是自己隊
+                        if (matchState.canKick) {
+                            // 可以開球 = true -> 開始正常追球
+                            if (isBallInFOV) {
+                                statusText = "⚽ 開球衝刺追球中";
+                                statusColor = "#4caf50";
+                                isRunning = true;
+                                this.updateStaminaAndRest(playerObj, dt, true);
+
+                                const targetAngleToBall = Math.atan2(toBallX, toBallZ);
+                                playerObj.rotation.y = targetAngleToBall;
+
+                                if (distToBallXZ > 0.3) {
+                                    const moveStep = this.runSpeed * dt;
+                                    playerObj.position.x += (toBallX / distToBallXZ) * Math.min(moveStep, distToBallXZ);
+                                    playerObj.position.z += (toBallZ / distToBallXZ) * Math.min(moveStep, distToBallXZ);
+                                }
+                            } else {
+                                statusText = "🔄 開球尋找球中";
+                                statusColor = "#ff9800";
+                                const turnSpeed = 3.5;
+                                playerObj.rotation.y -= turnSpeed * dt;
+                                playerObj.stamina = Math.min(this.maxStamina, playerObj.stamina + 2.0 * dt);
+                            }
+                        } else {
+                            // 可以開球 = false -> 往自己「上場時分配位置」移動
+                            statusText = "📍 就位等待全員回半場";
+                            statusColor = "#3f51b5";
+                            this.moveToAssignedPosition(playerObj, dt);
+                        }
+                    }
                 }
             }
 
@@ -78,15 +144,17 @@
 
             const canControl = this.checkControlRange(playerObj, ball, this.controlRange);
 
-            if (canControl && isBallInFOV && playerObj.restTimer <= 0 && playerObj.kickCooldown <= 0) {
-                // 2. 一拿到球就只會射向敵方球門
+            // 必須在已開球或自己擁有開球權且可以開球的情況下才能踢球
+            const canActionKick = matchState.restarted || (matchState.possession === this.team && matchState.canKick);
+
+            if (canControl && isBallInFOV && playerObj.restTimer <= 0 && playerObj.kickCooldown <= 0 && canActionKick) {
                 const toGoalX = gPos.x - pPos.x;
                 const toGoalZ = gPos.z - pPos.z;
                 const shootAngle = Math.atan2(toGoalX, toGoalZ);
 
-                playerObj.rotation.y = shootAngle; // 朝球門射門
+                playerObj.rotation.y = shootAngle;
 
-                kickForce = 22.0 * this.accuracy; // 結合準確度
+                kickForce = 22.0 * this.accuracy;
                 kickAngleY = 3.5;
                 didKick = true;
                 playerObj.kickCooldown = 0.6;

@@ -170,9 +170,6 @@
             color: #fff;
             font-weight: bold;
         }
-        .axis-x { color: #ff5252; }
-        .axis-y { color: #69f0ae; }
-        .axis-z { color: #448aff; }
         .goal-popup {
             position: absolute;
             top: 20px;
@@ -265,6 +262,13 @@
         </div>
 
         <div class="dashboard">
+            <h3>比賽與開球狀態</h3>
+            <div class="stat-row"><span class="stat-label">可以開球:</span><span class="stat-value" id="state-can-kick">false</span></div>
+            <div class="stat-row"><span class="stat-label">已重新開球:</span><span class="stat-value" id="state-restarted">true</span></div>
+            <div class="stat-row"><span class="stat-label">球權:</span><span class="stat-value" id="state-possession">blue</span></div>
+        </div>
+
+        <div class="dashboard">
             <h3>球員即時狀態儀表板</h3>
             <div id="players-dashboard-list">
                 <!-- 動態生成的球員狀態 -->
@@ -273,6 +277,13 @@
     </div>
 
     <script>
+        // --- 增設開球與球權狀態標記 ---
+        window.matchState = {
+            canKick: false,
+            restarted: true,
+            possession: 'blue'
+        };
+
         const boxWidth = 105;
         const boxHeight = 50;
         const boxDepth = 68;
@@ -489,6 +500,11 @@
         const scoreLeftEl = document.getElementById('score-left'), scoreRightEl = document.getElementById('score-right'), btnResetScore = document.getElementById('btn-reset-score');
         const dashboardList = document.getElementById('players-dashboard-list');
 
+        // 開球狀態顯示元素
+        const stateCanKickEl = document.getElementById('state-can-kick');
+        const stateRestartedEl = document.getElementById('state-restarted');
+        const statePossessionEl = document.getElementById('state-possession');
+
         function updateUI() {
             valFx.textContent = parseFloat(rangeFx.value).toFixed(1);
             valFy.textContent = parseFloat(rangeFy.value).toFixed(1);
@@ -526,6 +542,30 @@
             const mass = parseInt(rangeMass.value) * 0.01;
             let dashHTML = "";
 
+            // --- 檢查是否所有球員都在自己半場以解鎖可以開球 ---
+            if (!window.matchState.restarted && !window.matchState.canKick) {
+                let allInHalf = true;
+                activePlayers.forEach(p => {
+                    const px = p.mesh.position.x;
+                    if (p.ai.team === 'red') {
+                        if (px > 0) allInHalf = false; // 紅隊半場為 x <= 0
+                    } else {
+                        if (px < 0) allInHalf = false; // 藍隊半場為 x >= 0
+                    }
+                });
+                if (allInHalf) {
+                    window.matchState.canKick = true;
+                }
+            }
+
+            // 更新控制面板的比賽標記顯示
+            stateCanKickEl.textContent = window.matchState.canKick;
+            stateCanKickEl.style.color = window.matchState.canKick ? '#4caf50' : '#f44336';
+            stateRestartedEl.textContent = window.matchState.restarted;
+            stateRestartedEl.style.color = window.matchState.restarted ? '#4caf50' : '#ff9800';
+            statePossessionEl.textContent = window.matchState.possession;
+            statePossessionEl.style.color = (window.matchState.possession === 'red') ? '#ff5252' : '#42a5f5';
+
             // --- 逐一更新所有場上球員的 AI 與物理 ---
             activePlayers.forEach((p, index) => {
                 // 1. 維護頭頂血條 Billboard
@@ -554,6 +594,11 @@
                     velocity.x += forwardX * (res.kickForce / mass) * 0.15;
                     velocity.y += (res.kickAngleY || 3.5) / mass;
                     velocity.z += forwardZ * (res.kickForce / mass) * 0.15;
+
+                    // 若是在開球狀態下且為擁有球權的隊伍開球，踢出後視為已重新開球
+                    if (!window.matchState.restarted && window.matchState.canKick && p.ai.team === window.matchState.possession) {
+                        window.matchState.restarted = true;
+                    }
                 }
 
                 // 5. 組裝即時儀表板內容
@@ -590,9 +635,17 @@
             // 進球判斷
             if (ball.position.x <= -boxWidth / 2 + ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
                 scoreRight++; scoreRightEl.textContent = scoreRight;
+                // 左門失守 (紅隊被進球)，球權歸紅隊，重置開球狀態
+                window.matchState.restarted = false;
+                window.matchState.possession = 'red';
+                window.matchState.canKick = false;
                 resetBall();
             } else if (ball.position.x >= boxWidth / 2 - ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
                 scoreLeft++; scoreLeftEl.textContent = scoreLeft;
+                // 右門失守 (藍隊被進球)，球權歸藍隊，重置開球狀態
+                window.matchState.restarted = false;
+                window.matchState.possession = 'blue';
+                window.matchState.canKick = false;
                 resetBall();
             } else {
                 if (ball.position.x > maxX) { ball.position.x = maxX; velocity.x = -velocity.x; }
