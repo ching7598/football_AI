@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 足球物理模擬 - 動態載入特色球員系統</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+            display: flex;
+            height: 100vh;
+        }
+        #canvas-container {
+            flex-grow: 1;
+            height: 100%;
+            position: relative;
+        }
+        #control-panel {
+            width: 360px;
+            background: #242424;
+            border-left: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: #4CAF50;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+            text-align: center;
+        }
+        .load-player-box {
+            background: #2d2d2d;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 14px;
+            margin-bottom: 15px;
+        }
+        .load-player-box h3 {
+            margin: 0 0 10px 0;
+            font-size: 1.0rem;
+            color: #ffca28;
+            border-bottom: 1px dashed #555;
+            padding-bottom: 4px;
+        }
+        .team-selector {
+            display: flex;
+            gap: 15px;
+            margin: 10px 0;
+            font-size: 0.95rem;
+        }
+        .team-selector label {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .control-group {
+            margin-bottom: 14px;
+        }
+        label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            margin-bottom: 6px;
+            color: #ccc;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: #4CAF50;
+            cursor: pointer;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px;
+            font-size: 0.95rem;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            margin-top: 5px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            width: 100%;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        .btn-select-js {
+            background-color: #0288d1;
+        }
+        .btn-select-js:hover {
+            background-color: #0277bd;
+        }
+        .scoreboard-panel {
+            margin-top: 10px;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+        .scoreboard-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 0.95rem;
+            color: #ff9800;
+            border-bottom: 1px dashed #444;
+            padding-bottom: 4px;
+        }
+        .score-display {
+            font-size: 1.8rem;
+            font-weight: bold;
+            font-family: monospace;
+            color: #fff;
+            margin: 8px 0;
+        }
+        .score-team {
+            display: inline-block;
+            padding: 0 10px;
+        }
+        .btn-reset {
+            background-color: #f44336;
+            font-size: 0.85rem;
+            padding: 6px 12px;
+            margin-top: 6px;
+            width: auto;
+        }
+        .btn-reset:hover {
+            background-color: #d32f2f;
+        }
+        .dashboard {
+            margin-top: 15px;
+            background: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        .dashboard h3 {
+            margin: 0 0 8px 0;
+            font-size: 0.95rem;
+            color: #03a9f4;
+            border-bottom: 1px dashed #444;
+            padding-bottom: 4px;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            color: #aaa;
+        }
+        .stat-value {
+            color: #fff;
+            font-weight: bold;
+        }
+        .axis-x { color: #ff5252; }
+        .axis-y { color: #69f0ae; }
+        .axis-z { color: #448aff; }
+        .goal-popup {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 152, 0, 0.9);
+            color: white;
+            padding: 10px 30px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            display: none;
+            z-index: 10;
+            pointer-events: none;
+            animation: pulse 0.5s infinite alternate;
+        }
+        @keyframes pulse {
+            from { transform: translateX(-50%) scale(1); }
+            to { transform: translateX(-50%) scale(1.05); }
+        }
+    </style>
+    <!-- Three.js and OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <!-- 載入球員共通規則與基礎類別 -->
+    <script src="human_law.js"></script>
+    <!-- 預設載入 player0.js 範本 -->
+    <script src="player0.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <div id="goal-popup" class="goal-popup">⚽ GOAL!! 球進啦！</div>
+    </div>
+
+    <div id="control-panel">
+        <h2>物理模擬與特色球員管理</h2>
+
+        <!-- 控制區：載入特色球員 -->
+        <div class="load-player-box">
+            <h3>⚙️ 載入球員控制區</h3>
+            <label style="color:#fff; font-weight:bold;">載入球員</label>
+            
+            <div class="team-selector">
+                <span style="color:#aaa;">選擇球隊:</span>
+                <label style="color:#ff5252;">
+                    <input type="radio" name="team-choice" value="red"> 紅隊
+                </label>
+                <label style="color:#42a5f5;">
+                    <input type="radio" name="team-choice" value="blue" checked> 藍隊
+                </label>
+            </div>
+
+            <!-- 隱藏的 file input -->
+            <input type="file" id="js-file-input" accept=".js" style="display:none;">
+            <button class="btn-select-js" id="btn-trigger-file">📂 選擇 JS 檔案</button>
+        </div>
+
+        <div class="control-group">
+            <label>X 軸分力 (Fx): <span id="val-fx">0.0</span> N</label>
+            <input type="range" id="range-fx" min="-20" max="20" step="0.5" value="0">
+        </div>
+
+        <div class="control-group">
+            <label>Y 軸分力 (Fy): <span id="val-fy">0.0</span> N</label>
+            <input type="range" id="range-fy" min="-20" max="20" step="0.5" value="0">
+        </div>
+
+        <div class="control-group">
+            <label>Z 軸分力 (Fz): <span id="val-fz">0.0</span> N</label>
+            <input type="range" id="range-fz" min="-20" max="20" step="0.5" value="0">
+        </div>
+
+        <div class="control-group">
+            <label>球體質量 (M): <span id="val-mass">50</span> ×10g (<span id="val-mass-kg">0.50</span> kg)</label>
+            <input type="range" id="range-mass" min="10" max="100" step="1" value="50">
+        </div>
+
+        <button id="btn-apply">🚀 手動施力 (Apply Force)</button>
+
+        <div class="scoreboard-panel">
+            <h3>即時記分板</h3>
+            <div class="score-display">
+                <span class="score-team" id="score-left" style="color:#ff5252;">0</span> : <span class="score-team" id="score-right" style="color:#42a5f5;">0</span>
+            </div>
+            <div style="font-size:0.8rem; color:#aaa; margin-bottom:5px;">左門 (紅隊防守) : 右門 (藍隊防守)</div>
+            <button class="btn-reset" id="btn-reset-score">🔄 記分板歸零</button>
+        </div>
+
+        <div class="dashboard">
+            <h3>球員即時狀態儀表板</h3>
+            <div id="players-dashboard-list">
+                <!-- 動態生成的球員狀態 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const boxWidth = 105;
+        const boxHeight = 50;
+        const boxDepth = 68;
+
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+
+        const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 45, 120);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // 燈光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(40, 80, 50);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // 邊框
+        const boxGeometry = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
+        const wireframeMaterial = new THREE.MeshBasicMaterial({ color: 0x444444, wireframe: true, transparent: true, opacity: 0.3 });
+        const boxMesh = new THREE.Mesh(boxGeometry, wireframeMaterial);
+        boxMesh.position.set(0, boxHeight / 2, 0);
+        scene.add(boxMesh);
+
+        // 球場草皮
+        function createSoccerFieldTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2048; canvas.height = 1360;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#2e7d32'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#388e3c';
+            const stripes = 20; const stripeWidth = canvas.width / stripes;
+            for (let i = 0; i < stripes; i += 2) ctx.fillRect(i * stripeWidth, 0, stripeWidth, canvas.height);
+            ctx.strokeStyle = '#ffffff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = 10;
+            const w = canvas.width, h = canvas.height, margin = 80;
+            const fieldW = w - margin * 2, fieldH = h - margin * 2;
+            ctx.strokeRect(margin, margin, fieldW, fieldH);
+            ctx.beginPath(); ctx.moveTo(w / 2, margin); ctx.lineTo(w / 2, h - margin); ctx.stroke();
+            ctx.beginPath(); ctx.arc(w / 2, h / 2, fieldH * 0.15, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(w / 2, h / 2, 8, 0, Math.PI * 2); ctx.fill();
+            const box18W = fieldW * 0.16, box18H = fieldH * 0.58;
+            ctx.strokeRect(margin, margin + (fieldH - box18H) / 2, box18W, box18H);
+            const box6W = fieldW * 0.06, box6H = fieldH * 0.24;
+            ctx.strokeRect(margin, margin + (fieldH - box6H) / 2, box6W, box6H);
+            ctx.strokeRect(w - margin - box18W, margin + (fieldH - box18H) / 2, box18W, box18H);
+            ctx.strokeRect(w - margin - box6W, margin + (fieldH - box6H) / 2, box6W, box6H);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const floorMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(boxWidth, boxDepth),
+            new THREE.MeshStandardMaterial({ map: createSoccerFieldTexture(), roughness: 0.8 })
+        );
+        floorMesh.rotation.x = -Math.PI / 2;
+        floorMesh.receiveShadow = true;
+        scene.add(floorMesh);
+
+        // 球門
+        const goalWidth = 7.32, goalHeight = 2.44, goalDepth = 4.0;
+        function createGoal() {
+            const group = new THREE.Group();
+            const postMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.8 });
+            const netMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.25, transparent: true });
+            const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, goalHeight), postMat);
+            p1.position.set(0, goalHeight / 2, goalWidth / 2); group.add(p1);
+            const p2 = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, goalHeight), postMat);
+            p2.position.set(0, goalHeight / 2, -goalWidth / 2); group.add(p2);
+            const cb = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, goalWidth), postMat);
+            cb.rotation.z = Math.PI / 2; cb.position.set(0, goalHeight, 0); group.add(cb);
+            const net = new THREE.Mesh(new THREE.BoxGeometry(goalDepth, goalHeight, goalWidth), netMat);
+            net.position.set(-goalDepth / 2, goalHeight / 2, 0); group.add(net);
+            return group;
+        }
+
+        const leftGoal = createGoal(); leftGoal.position.set(-boxWidth / 2, 0, 0); scene.add(leftGoal);
+        const rightGoal = createGoal(); rightGoal.rotation.y = Math.PI; rightGoal.position.set(boxWidth / 2, 0, 0); scene.add(rightGoal);
+
+        // 足球
+        const ballRadius = boxWidth * 0.003 / 2;
+        const ball = new THREE.Mesh(
+            new THREE.SphereGeometry(ballRadius, 32, 32),
+            new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 })
+        );
+        ball.castShadow = true;
+        ball.position.set(0, ballRadius, 0);
+        scene.add(ball);
+
+        let velocity = new THREE.Vector3(0, 0, 0);
+        let acceleration = new THREE.Vector3(0, -9.8, 0);
+        const gravity = -9.8;
+        const restitutionFloor = 0.75, frictionCoefficient = 0.985;
+        let scoreLeft = 0, scoreRight = 0;
+
+        // --- 管理場上球員的陣列 ---
+        const activePlayers = []; // { mesh, aiInstance, info }
+
+        // 建立球員 3D 模型
+        function spawnPlayerModel(teamColor, posX, posZ, playerName) {
+            const group = new THREE.Group();
+            const skinMat = new THREE.MeshStandardMaterial({ color: 0xffdbac });
+            const jerseyColor = (teamColor === 'red') ? 0xe53935 : 0x1e88e5;
+            const jerseyMat = new THREE.MeshStandardMaterial({ color: jerseyColor });
+            const shortsMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const visorMat = new THREE.MeshStandardMaterial({ color: 0xffeb3b });
+
+            // 頭、眼面導向、軀幹、雙腿
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), skinMat); head.position.set(0, 1.65, 0); group.add(head);
+            const face = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.12), visorMat); face.position.set(0, 1.67, 0.12); group.add(face);
+            const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.7), jerseyMat); torso.position.set(0, 1.15, 0); group.add(torso);
+            const shorts = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.3), shortsMat); shorts.position.set(0, 0.65, 0); group.add(shorts);
+            const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.07, 0.5), skinMat); legL.position.set(0.1, 0.25, 0); group.add(legL);
+            const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.07, 0.5), skinMat); legR.position.set(-0.1, 0.25, 0); group.add(legR);
+
+            // 頭頂 3D 血條
+            const hpGroup = new THREE.Group(); hpGroup.position.set(0, 2.1, 0);
+            const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.22), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }));
+            hpGroup.add(bgMesh);
+
+            const fillGeo = new THREE.PlaneGeometry(1.5, 0.16); fillGeo.translate(0.75, 0, 0);
+            const fillMesh = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: 0x4caf50, side: THREE.DoubleSide }));
+            fillMesh.position.set(-0.75, 0, 0.01);
+            hpGroup.add(fillMesh);
+            group.add(hpGroup);
+
+            group.position.set(posX, 0, posZ);
+            group.rotation.y = (teamColor === 'red') ? Math.PI / 2 : -Math.PI / 2;
+            scene.add(group);
+
+            return { group, fillMesh };
+        }
+
+        // 初始化預設藍隊球員 (使用 player0.js 類別)
+        function initDefaultPlayer() {
+            if (window.PlayerAI) {
+                const aiInstance = new window.PlayerAI();
+                aiInstance.team = 'blue';
+                const model = spawnPlayerModel('blue', 20, 0, '預設藍隊AI');
+                activePlayers.push({
+                    mesh: model.group,
+                    fillMesh: model.fillMesh,
+                    ai: aiInstance,
+                    name: '球員 #1 (藍隊)'
+                });
+            }
+        }
+        initDefaultPlayer();
+
+        // --- 動態載入 JS 檔案控制區 ---
+        const btnTriggerFile = document.getElementById('btn-trigger-file');
+        const jsFileInput = document.getElementById('js-file-input');
+
+        btnTriggerFile.addEventListener('click', () => {
+            jsFileInput.click();
+        });
+
+        jsFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const selectedTeam = document.querySelector('input[name="team-choice"]:checked').value;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                try {
+                    const jsCode = event.target.result;
+                    // 動態執行載入的 JS 代碼
+                    const scriptEvaluator = new Function(jsCode);
+                    scriptEvaluator();
+
+                    if (window.PlayerAI) {
+                        const newAI = new window.PlayerAI();
+                        newAI.team = selectedTeam; // 指派選擇的球隊
+
+                        const startX = (selectedTeam === 'red') ? -20 : 20;
+                        const startZ = (Math.random() - 0.5) * 30;
+                        const teamNameZH = (selectedTeam === 'red') ? '紅隊' : '藍隊';
+                        const pName = `${newAI.name || '特色球員'} (${teamNameZH})`;
+
+                        const model = spawnPlayerModel(selectedTeam, startX, startZ, pName);
+
+                        activePlayers.push({
+                            mesh: model.group,
+                            fillMesh: model.fillMesh,
+                            ai: newAI,
+                            name: pName
+                        });
+
+                        alert(`✅ 成功載入球員 [${pName}] 並加入場上！`);
+                    } else {
+                        alert("⚠️ JS 檔案中未發現 window.PlayerAI 宣告！");
+                    }
+                } catch (err) {
+                    alert("❌ 載入 JS 檔案時發生錯誤: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // UI 與儀表板更新
+        const rangeFx = document.getElementById('range-fx'), rangeFy = document.getElementById('range-fy'), rangeFz = document.getElementById('range-fz'), rangeMass = document.getElementById('range-mass');
+        const valFx = document.getElementById('val-fx'), valFy = document.getElementById('val-fy'), valFz = document.getElementById('val-fz'), valMass = document.getElementById('val-mass'), valMassKg = document.getElementById('val-mass-kg');
+        const scoreLeftEl = document.getElementById('score-left'), scoreRightEl = document.getElementById('score-right'), btnResetScore = document.getElementById('btn-reset-score');
+        const dashboardList = document.getElementById('players-dashboard-list');
+
+        function updateUI() {
+            valFx.textContent = parseFloat(rangeFx.value).toFixed(1);
+            valFy.textContent = parseFloat(rangeFy.value).toFixed(1);
+            valFz.textContent = parseFloat(rangeFz.value).toFixed(1);
+            valMass.textContent = rangeMass.value;
+            valMassKg.textContent = (parseInt(rangeMass.value) * 0.01).toFixed(2);
+        }
+        [rangeFx, rangeFy, rangeFz, rangeMass].forEach(input => input.addEventListener('input', updateUI));
+        updateUI();
+
+        btnResetScore.addEventListener('click', () => {
+            scoreLeft = 0; scoreRight = 0;
+            scoreLeftEl.textContent = 0; scoreRightEl.textContent = 0;
+        });
+
+        document.getElementById('btn-apply').addEventListener('click', () => {
+            const m = parseInt(rangeMass.value) * 0.01;
+            velocity.x += (parseFloat(rangeFx.value) / m) * 0.1;
+            velocity.y += (parseFloat(rangeFy.value) / m) * 0.1;
+            velocity.z += (parseFloat(rangeFz.value) / m) * 0.1;
+        });
+
+        function resetBall() {
+            ball.position.set(0, ballRadius, 0);
+            velocity.set(0, 0, 0);
+        }
+
+        let clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            let dt = clock.getDelta();
+            if (dt > 0.1) dt = 0.1;
+
+            const mass = parseInt(rangeMass.value) * 0.01;
+            let dashHTML = "";
+
+            // --- 逐一更新所有場上球員的 AI 與物理 ---
+            activePlayers.forEach((p, index) => {
+                // 1. 維護頭頂血條 Billboard
+                if (p.mesh.children[6]) {
+                    p.mesh.children[6].quaternion.copy(camera.quaternion);
+                }
+
+                // 2. 執行封裝的球員 AI update()
+                const res = p.ai.update(dt, p.mesh, ball, activePlayers, { leftGoal, rightGoal });
+
+                // 3. 更新 3D 血條長度與顏色
+                if (p.fillMesh) {
+                    const ratio = Math.max(0, res.stamina / res.maxStamina);
+                    p.fillMesh.scale.x = ratio;
+                    if (res.staminaColor) {
+                        p.fillMesh.material.color.setHex(res.staminaColor);
+                    } else {
+                        p.fillMesh.material.color.setHex(ratio > 0.5 ? 0x4caf50 : (ratio > 0.2 ? 0xffc107 : 0xf44336));
+                    }
+                }
+
+                // 4. 若球員觸發踢球
+                if (res.didKick) {
+                    const forwardX = Math.sin(p.mesh.rotation.y);
+                    const forwardZ = Math.cos(p.mesh.rotation.y);
+                    velocity.x += forwardX * (res.kickForce / mass) * 0.15;
+                    velocity.y += (res.kickAngleY || 3.5) / mass;
+                    velocity.z += forwardZ * (res.kickForce / mass) * 0.15;
+                }
+
+                // 5. 組裝即時儀表板內容
+                const teamTag = (p.ai.team === 'red') ? '<span style="color:#ff5252;">[紅隊]</span>' : '<span style="color:#42a5f5;">[藍隊]</span>';
+                dashHTML += `
+                    <div style="border-bottom:1px solid #333; padding-bottom:6px; margin-bottom:6px;">
+                        <div style="font-weight:bold; color:#fff;">${teamTag} ${p.name}</div>
+                        <div class="stat-row"><span class="stat-label">體能血條:</span><span class="stat-value">${res.stamina.toFixed(1)}%</span></div>
+                        <div class="stat-row"><span class="stat-label">狀態:</span><span class="stat-value" style="color:${res.statusColor}">${res.statusText}</span></div>
+                    </div>
+                `;
+            });
+
+            dashboardList.innerHTML = dashHTML;
+
+            // --- 足球物理運動計算 ---
+            acceleration.set(0, gravity, 0);
+            velocity.x += acceleration.x * dt;
+            velocity.y += acceleration.y * dt;
+            velocity.z += acceleration.z * dt;
+
+            if (Math.abs(ball.position.y - ballRadius) < 0.05) {
+                velocity.x *= Math.pow(frictionCoefficient, dt * 60);
+                velocity.z *= Math.pow(frictionCoefficient, dt * 60);
+            }
+
+            ball.position.x += velocity.x * dt;
+            ball.position.y += velocity.y * dt;
+            ball.position.z += velocity.z * dt;
+
+            const maxX = boxWidth / 2 - ballRadius, maxZ = boxDepth / 2 - ballRadius;
+            const minY = ballRadius, maxY = boxHeight - ballRadius;
+
+            // 進球判斷
+            if (ball.position.x <= -boxWidth / 2 + ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
+                scoreRight++; scoreRightEl.textContent = scoreRight;
+                resetBall();
+            } else if (ball.position.x >= boxWidth / 2 - ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
+                scoreLeft++; scoreLeftEl.textContent = scoreLeft;
+                resetBall();
+            } else {
+                if (ball.position.x > maxX) { ball.position.x = maxX; velocity.x = -velocity.x; }
+                else if (ball.position.x < -maxX) { ball.position.x = -maxX; velocity.x = -velocity.x; }
+            }
+
+            if (ball.position.z > maxZ) { ball.position.z = maxZ; velocity.z = -velocity.z; }
+            else if (ball.position.z < -maxZ) { ball.position.z = -maxZ; velocity.z = -velocity.z; }
+            if (ball.position.y > maxY) { ball.position.y = maxY; velocity.y = -velocity.y; }
+            if (ball.position.y < minY) { ball.position.y = minY; velocity.y = -velocity.y * restitutionFloor; if (Math.abs(velocity.y) < 0.2) velocity.y = 0; }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+    </script>
+</body>
+</html>
