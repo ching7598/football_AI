@@ -170,6 +170,9 @@
             color: #fff;
             font-weight: bold;
         }
+        .axis-x { color: #ff5252; }
+        .axis-y { color: #69f0ae; }
+        .axis-z { color: #448aff; }
         .goal-popup {
             position: absolute;
             top: 20px;
@@ -198,8 +201,7 @@
     
     <!-- 載入球員共通規則與基礎類別 -->
     <script src="human_law.js"></script>
-    <!-- 預設載入 player0.js 範本 -->
-    <script src="player0.js"></script>
+    <!-- 球員大腦在獨立 Worker 執行；不再載入 player0.js -->
 </head>
 <body>
 
@@ -210,24 +212,22 @@
     <div id="control-panel">
         <h2>物理模擬與特色球員管理</h2>
 
-        <!-- 控制區：載入特色球員 -->
+        <!-- 大腦與身體分開載入；JS 不會在主頁面執行 -->
         <div class="load-player-box">
-            <h3>⚙️ 載入球員控制區</h3>
-            <label style="color:#fff; font-weight:bold;">載入球員</label>
-            
+            <h3>⚙️ 載入球員（四層架構）</h3>
+            <label>大腦 JS：<input type="file" id="brain-file" accept=".js"></label>
+            <div id="brain-file-label" style="font-size:0.8rem;color:#aaa">預設 brain_0.js（透過 HTTP 開啟時自動讀取）</div>
+            <label>身體能力 JS：<input type="file" id="physical-file" accept=".js"></label>
+            <div id="physical-file-label" style="font-size:0.8rem;color:#aaa">預設 physical_0.js（透過 HTTP 開啟時自動讀取）</div>
             <div class="team-selector">
-                <span style="color:#aaa;">選擇球隊:</span>
-                <label style="color:#ff5252;">
-                    <input type="radio" name="team-choice" value="red"> 紅隊
-                </label>
-                <label style="color:#42a5f5;">
-                    <input type="radio" name="team-choice" value="blue" checked> 藍隊
-                </label>
+                <span>選擇隊伍：</span>
+                <label><input type="radio" name="team-choice" value="red"> 紅隊</label>
+                <label><input type="radio" name="team-choice" value="blue" checked> 藍隊</label>
             </div>
-
-            <!-- 隱藏的 file input -->
-            <input type="file" id="js-file-input" accept=".js" style="display:none;">
-            <button class="btn-select-js" id="btn-trigger-file">📂 選擇 JS 檔案</button>
+            <label>回防 X：<input type="number" id="defense-x" min="-52" max="52" step="0.5" value="20" style="width:75px"></label>
+            <label>回防 Z：<input type="number" id="defense-z" min="-33" max="33" step="0.5" value="0" style="width:75px"></label>
+            <button id="btn-load-player" disabled>載入球員</button>
+            <div id="load-status" style="font-size:0.8rem;color:#aaa">請等待預設檔載入，或自行選擇兩個 JS 檔</div>
         </div>
 
         <div class="control-group">
@@ -258,14 +258,8 @@
                 <span class="score-team" id="score-left" style="color:#ff5252;">0</span> : <span class="score-team" id="score-right" style="color:#42a5f5;">0</span>
             </div>
             <div style="font-size:0.8rem; color:#aaa; margin-bottom:5px;">左門 (紅隊防守) : 右門 (藍隊防守)</div>
+            <div id="kickoff-status" style="font-size:0.8rem;margin:7px 0;color:#ddd">可以開球=false｜已重新開球=true｜球權=blue</div>
             <button class="btn-reset" id="btn-reset-score">🔄 記分板歸零</button>
-        </div>
-
-        <div class="dashboard">
-            <h3>比賽與開球狀態</h3>
-            <div class="stat-row"><span class="stat-label">可以開球:</span><span class="stat-value" id="state-can-kick">false</span></div>
-            <div class="stat-row"><span class="stat-label">已重新開球:</span><span class="stat-value" id="state-restarted">true</span></div>
-            <div class="stat-row"><span class="stat-label">球權:</span><span class="stat-value" id="state-possession">blue</span></div>
         </div>
 
         <div class="dashboard">
@@ -277,13 +271,6 @@
     </div>
 
     <script>
-        // --- 增設開球與球權狀態標記 ---
-        window.matchState = {
-            canKick: false,
-            restarted: true,
-            possession: 'blue'
-        };
-
         const boxWidth = 105;
         const boxHeight = 50;
         const boxDepth = 68;
@@ -388,9 +375,34 @@
         const gravity = -9.8;
         const restitutionFloor = 0.75, frictionCoefficient = 0.985;
         let scoreLeft = 0, scoreRight = 0;
+        // 球權及重新開球狀態由主程式持有，Brain 只能接收副本。
+        const matchState = { canKickoff: false, restarted: true, possession: 'blue' };
+        function everyoneInOwnHalf() {
+            return activePlayers.every(p => p.team === 'blue'
+                ? p.state.position.x >= -1e-6
+                : p.state.position.x <= 1e-6);
+        }
+        function updateKickoffPermission() {
+            if (!matchState.restarted) matchState.canKickoff = everyoneInOwnHalf();
+        }
+        function beginKickoff(possession) {
+            resetBall();
+            matchState.restarted = false;
+            matchState.possession = possession;
+            matchState.canKickoff = false;
+            // 清除舊的追球願望與足球記憶，避免進球前的指令殘留。
+            for (const p of activePlayers) {
+                p.wish = null;
+                p.worker.postMessage({ type: 'reset' });
+            }
+            updateKickoffPermission();
+        }
 
-        // --- 管理場上球員的陣列 ---
-        const activePlayers = []; // { mesh, aiInstance, info }
+        // 球員狀態由引擎持有，Brain 只收到結構化資料副本。
+        const activePlayers = [];
+        const RULES = window.HumanLaw;
+        const fieldInfo = { width: boxWidth, depth: boxDepth, ballRadius };
+        let nextPlayerId = 1;
 
         // 建立球員 3D 模型
         function spawnPlayerModel(teamColor, posX, posZ, playerName) {
@@ -427,83 +439,139 @@
             return { group, fillMesh };
         }
 
-        // 初始化預設藍隊球員 (使用 player0.js 類別)
-        function initDefaultPlayer() {
-            if (window.PlayerAI) {
-                const aiInstance = new window.PlayerAI();
-                aiInstance.team = 'blue';
-                const model = spawnPlayerModel('blue', 20, 0, '預設藍隊AI');
-                activePlayers.push({
-                    mesh: model.group,
-                    fillMesh: model.fillMesh,
-                    ai: aiInstance,
-                    name: '球員 #1 (藍隊)'
-                });
-            }
+        // 解析設定檔的 JSON 區塊，不執行 physical_0.js 的任何程式。
+        function parsePhysicalSource(source) {
+            const match = source.match(/PHYSICAL_PROFILE_START\s*([\s\S]*?)\s*PHYSICAL_PROFILE_END/);
+            if (!match) throw new Error('身體設定檔缺少 PHYSICAL_PROFILE_START / END');
+            const data = JSON.parse(match[1]);
+            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('身體設定必須是 JSON 物件');
+            return { name: String(data.name || '球員').slice(0, 40), physical: RULES.physical(data) };
         }
-        initDefaultPlayer();
+        function readFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result));
+                reader.onerror = () => reject(reader.error);
+                reader.readAsText(file);
+            });
+        }
+        let brainSource = null, physicalSource = null;
+        const brainInput = document.getElementById('brain-file');
+        const physicalInput = document.getElementById('physical-file');
+        const loadBtn = document.getElementById('btn-load-player');
+        const loadStatus = document.getElementById('load-status');
+        function validateLoadForm() {
+            const x = Number(document.getElementById('defense-x').value);
+            const z = Number(document.getElementById('defense-z').value);
+            const valid = brainSource && physicalSource && Number.isFinite(x) && Number.isFinite(z) &&
+                Math.abs(x) <= boxWidth / 2 - 1 && Math.abs(z) <= boxDepth / 2 - 1;
+            loadBtn.disabled = !valid;
+            if (valid) loadStatus.textContent = '大腦與身體檔案就緒，可以載入球員';
+        }
+        for (const id of ['defense-x', 'defense-z']) document.getElementById(id).addEventListener('input', validateLoadForm);
+        brainInput.addEventListener('change', async () => {
+            brainSource = null;
+            if (brainInput.files[0]) {
+                try { brainSource = await readFile(brainInput.files[0]); }
+                catch (e) { loadStatus.textContent = '大腦檔讀取失敗：' + e.message; }
+            }
+            validateLoadForm();
+        });
+        physicalInput.addEventListener('change', async () => {
+            physicalSource = null;
+            if (physicalInput.files[0]) {
+                try { physicalSource = await readFile(physicalInput.files[0]); parsePhysicalSource(physicalSource); }
+                catch (e) { loadStatus.textContent = '身體檔無效：' + e.message; }
+            }
+            validateLoadForm();
+        });
+        // 透過本機 HTTP server 開啟時，預設使用 brain_0.js 和 physical_0.js。
+        // 若直接 file:// 開啟，瀏覽器可能禁止 fetch；可改用上方檔案選擇器。
+        Promise.all([fetch('brain_0.js').then(r => { if (!r.ok) throw Error('brain'); return r.text(); }),
+                     fetch('physical_0.js').then(r => { if (!r.ok) throw Error('physical'); return r.text(); })])
+          .then(([brain, physical]) => {
+              if (!brainInput.files.length) brainSource = brain;
+              if (!physicalInput.files.length) { parsePhysicalSource(physical); physicalSource = physical; }
+              validateLoadForm();
+          }).catch(() => { loadStatus.textContent = '請選取 brain_0.js 與 physical_0.js（直接開啟 HTML 時需手動選檔）'; });
 
-        // --- 動態載入 JS 檔案控制區 ---
-        const btnTriggerFile = document.getElementById('btn-trigger-file');
-        const jsFileInput = document.getElementById('js-file-input');
-
-        btnTriggerFile.addEventListener('click', () => {
-            jsFileInput.click();
+        loadBtn.addEventListener('click', () => {
+            try {
+                if (!brainSource || !physicalSource) throw new Error('請先選擇大腦和身體檔案');
+                const team = document.querySelector('input[name="team-choice"]:checked').value;
+                const x = Number(document.getElementById('defense-x').value);
+                const z = Number(document.getElementById('defense-z').value);
+                if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > 51.5 || Math.abs(z) > 33)
+                    throw new Error('回防座標超出球場範圍');
+                const parsed = parsePhysicalSource(physicalSource);
+                const blob = new Blob([brainSource], { type: 'text/javascript' });
+                const url = URL.createObjectURL(blob);
+                let worker;
+                try { worker = new Worker(url); } finally { URL.revokeObjectURL(url); }
+                const id = nextPlayerId++;
+                const name = parsed.name + ' #' + id;
+                const model = spawnPlayerModel(team, x, z, name);
+                const player = {
+                    id, name, team, mesh: model.group, fillMesh: model.fillMesh, worker,
+                    physical: parsed.physical, defensePosition: { x, z },
+                    assignedPosition: { x, z },
+                    state: { position: { x, z }, velocity: { x: 0, z: 0 },
+                        facing: team === 'red' ? Math.PI / 2 : -Math.PI / 2,
+                        stamina: parsed.physical.maxStamina, restTimer: 0, kickCooldown: 0 },
+                    wish: null, status: '等待大腦啟動', pending: false, seq: 0
+                };
+                worker.onmessage = e => {
+                    if (e.data.id !== player.seq) return;
+                    player.pending = false;
+                    if (e.data.error) { player.status = '大腦錯誤'; return; }
+                    player.wish = RULES.action(e.data.wish);
+                    player.status = String(e.data.wish?.status || '行動中').slice(0, 60);
+                };
+                worker.onerror = e => { player.pending = false; player.status = '大腦執行錯誤'; console.error(e); };
+                activePlayers.push(player);
+                updateKickoffPermission();
+                loadStatus.textContent = '已載入 ' + name + '（' + team + '）';
+            } catch (e) { loadStatus.textContent = '載入失敗：' + e.message; }
         });
 
-        jsFileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            const selectedTeam = document.querySelector('input[name="team-choice"]:checked').value;
-
-            const reader = new FileReader();
-            reader.onload = function(event) {
-                try {
-                    const jsCode = event.target.result;
-                    // 動態執行載入的 JS 代碼
-                    const scriptEvaluator = new Function(jsCode);
-                    scriptEvaluator();
-
-                    if (window.PlayerAI) {
-                        const newAI = new window.PlayerAI();
-                        newAI.team = selectedTeam; // 指派選擇的球隊
-
-                        const startX = (selectedTeam === 'red') ? -20 : 20;
-                        const startZ = (Math.random() - 0.5) * 30;
-                        const teamNameZH = (selectedTeam === 'red') ? '紅隊' : '藍隊';
-                        const pName = `${newAI.name || '特色球員'} (${teamNameZH})`;
-
-                        const model = spawnPlayerModel(selectedTeam, startX, startZ, pName);
-
-                        activePlayers.push({
-                            mesh: model.group,
-                            fillMesh: model.fillMesh,
-                            ai: newAI,
-                            name: pName
-                        });
-
-                        alert(`✅ 成功載入球員 [${pName}] 並加入場上！`);
-                    } else {
-                        alert("⚠️ JS 檔案中未發現 window.PlayerAI 宣告！");
-                    }
-                } catch (err) {
-                    alert("❌ 載入 JS 檔案時發生錯誤: " + err.message);
-                }
-            };
-            reader.readAsText(file);
-        });
+        function observe(player) {
+            const s = player.state;
+            const forward = { x: Math.sin(s.facing), z: Math.cos(s.facing) };
+            function visible(pos) {
+                const dx = pos.x - s.position.x, dz = pos.z - s.position.z;
+                const dist = Math.hypot(dx, dz);
+                return dist < 0.01 || (dx * forward.x + dz * forward.z) / dist >= Math.cos(RULES.SETTINGS.fovRadians / 2);
+            }
+            const objects = [];
+            if (visible(ball.position)) objects.push({ id: 'ball', type: 'ball',
+                position: { x: ball.position.x, y: ball.position.y, z: ball.position.z },
+                velocity: { x: velocity.x, y: velocity.y, z: velocity.z },
+                acceleration: { x: 0, y: gravity, z: 0 } });
+            for (const other of activePlayers) {
+                if (other === player || !visible(other.state.position)) continue;
+                objects.push({ id: 'player_' + other.id, type: 'player', team: other.team,
+                    position: { ...other.state.position }, velocity: { ...other.state.velocity },
+                    acceleration: { x: 0, z: 0 } });
+            }
+            for (const [id, goal, team] of [['leftGoal', leftGoal, 'red'], ['rightGoal', rightGoal, 'blue']]) {
+                if (visible(goal.position)) objects.push({ id, type: 'goal', team,
+                    position: { x: goal.position.x, y: 0, z: goal.position.z },
+                    velocity: { x: 0, y: 0, z: 0 }, acceleration: { x: 0, y: 0, z: 0 } });
+            }
+            return { self: { id: player.id, team: player.team,
+                    position: { ...s.position }, velocity: { ...s.velocity }, facing: s.facing,
+                    stamina: s.stamina, maxStamina: player.physical.maxStamina, resting: s.restTimer > 0 },
+                visibleObjects: objects,
+                defensePosition: { ...player.defensePosition },
+                assignedPosition: { ...player.assignedPosition },
+                matchState: { ...matchState } };
+        }
 
         // UI 與儀表板更新
         const rangeFx = document.getElementById('range-fx'), rangeFy = document.getElementById('range-fy'), rangeFz = document.getElementById('range-fz'), rangeMass = document.getElementById('range-mass');
         const valFx = document.getElementById('val-fx'), valFy = document.getElementById('val-fy'), valFz = document.getElementById('val-fz'), valMass = document.getElementById('val-mass'), valMassKg = document.getElementById('val-mass-kg');
         const scoreLeftEl = document.getElementById('score-left'), scoreRightEl = document.getElementById('score-right'), btnResetScore = document.getElementById('btn-reset-score');
         const dashboardList = document.getElementById('players-dashboard-list');
-
-        // 開球狀態顯示元素
-        const stateCanKickEl = document.getElementById('state-can-kick');
-        const stateRestartedEl = document.getElementById('state-restarted');
-        const statePossessionEl = document.getElementById('state-possession');
 
         function updateUI() {
             valFx.textContent = parseFloat(rangeFx.value).toFixed(1);
@@ -521,6 +589,10 @@
         });
 
         document.getElementById('btn-apply').addEventListener('click', () => {
+            if (!matchState.restarted) {
+                loadStatus.textContent = '等待重新開球：暫時禁止手動對球施力';
+                return;
+            }
             const m = parseInt(rangeMass.value) * 0.01;
             velocity.x += (parseFloat(rangeFx.value) / m) * 0.1;
             velocity.y += (parseFloat(rangeFy.value) / m) * 0.1;
@@ -542,76 +614,54 @@
             const mass = parseInt(rangeMass.value) * 0.01;
             let dashHTML = "";
 
-            // --- 檢查是否所有球員都在自己半場以解鎖可以開球 ---
-            if (!window.matchState.restarted && !window.matchState.canKick) {
-                let allInHalf = true;
-                activePlayers.forEach(p => {
-                    const px = p.mesh.position.x;
-                    if (p.ai.team === 'red') {
-                        if (px > 0) allInHalf = false; // 紅隊半場為 x <= 0
-                    } else {
-                        if (px < 0) allInHalf = false; // 藍隊半場為 x >= 0
-                    }
-                });
-                if (allInHalf) {
-                    window.matchState.canKick = true;
+            // AI 在 Worker 中非同步思考；主程式只接受意圖並依人體規則執行。
+            updateKickoffPermission();
+            for (const p of activePlayers) {
+                if (!p.pending) {
+                    p.pending = true;
+                    p.seq++;
+                    p.worker.postMessage({ type: 'decide', id: p.seq, dt, observation: observe(p) });
                 }
+                // 即使 Brain 嘗試作弊，開球前也只能由有球權隊在允許時踢球。
+                const canKick = matchState.restarted ||
+                    (matchState.canKickoff && matchState.possession === p.team);
+                const wish = p.wish && !canKick
+                    ? { ...p.wish, kick: { x: 0, y: 0, z: 0 } } : p.wish;
+                const result = RULES.advance(p, wish, dt, ball.position, velocity, mass, fieldInfo);
+                if (result.kicked && !matchState.restarted && canKick) {
+                    matchState.restarted = true;
+                    matchState.canKickoff = false;
+                }
+                p.mesh.position.set(p.state.position.x, 0, p.state.position.z);
+                p.mesh.rotation.y = p.state.facing;
+                if (p.mesh.children[6]) p.mesh.children[6].quaternion.copy(camera.quaternion);
+                const ratio = p.state.stamina / p.physical.maxStamina;
+                p.fillMesh.scale.x = Math.max(0, Math.min(1, ratio));
+                p.fillMesh.material.color.setHex(ratio > 0.5 ? 0x4caf50 : ratio > 0.2 ? 0xffc107 : 0xf44336);
+                const teamTag = p.team === 'red' ? '[紅隊]' : '[藍隊]';
+                const status = result.resting ? '喘氣中' : p.status;
+                // textContent-style escaping for names/status shown in HTML template
+                const safe = t => String(t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+                dashHTML += `<div style="border-bottom:1px solid #333;padding:6px">
+                    <b>${teamTag} ${safe(p.name)}</b><div>體能：${p.state.stamina.toFixed(0)} / ${p.physical.maxStamina.toFixed(0)}</div>
+                    <div>狀態：${safe(status)}</div><div>速度：${Math.hypot(p.state.velocity.x, p.state.velocity.z).toFixed(2)} m/s</div>
+                    </div>`;
+            }
+            // 在平面上對所有球員兩兩進行質量相關的彈性碰撞。
+            for (let i = 0; i < activePlayers.length; i++)
+                for (let j = i + 1; j < activePlayers.length; j++)
+                    RULES.collide(activePlayers[i], activePlayers[j]);
+            for (const p of activePlayers) {
+                p.state.position.x = Math.max(-boxWidth/2 + p.physical.bodyRadius,
+                    Math.min(boxWidth/2 - p.physical.bodyRadius, p.state.position.x));
+                p.state.position.z = Math.max(-boxDepth/2 + p.physical.bodyRadius,
+                    Math.min(boxDepth/2 - p.physical.bodyRadius, p.state.position.z));
+                p.mesh.position.set(p.state.position.x, 0, p.state.position.z);
             }
 
-            // 更新控制面板的比賽標記顯示
-            stateCanKickEl.textContent = window.matchState.canKick;
-            stateCanKickEl.style.color = window.matchState.canKick ? '#4caf50' : '#f44336';
-            stateRestartedEl.textContent = window.matchState.restarted;
-            stateRestartedEl.style.color = window.matchState.restarted ? '#4caf50' : '#ff9800';
-            statePossessionEl.textContent = window.matchState.possession;
-            statePossessionEl.style.color = (window.matchState.possession === 'red') ? '#ff5252' : '#42a5f5';
-
-            // --- 逐一更新所有場上球員的 AI 與物理 ---
-            activePlayers.forEach((p, index) => {
-                // 1. 維護頭頂血條 Billboard
-                if (p.mesh.children[6]) {
-                    p.mesh.children[6].quaternion.copy(camera.quaternion);
-                }
-
-                // 2. 執行封裝的球員 AI update()
-                const res = p.ai.update(dt, p.mesh, ball, activePlayers, { leftGoal, rightGoal });
-
-                // 3. 更新 3D 血條長度與顏色
-                if (p.fillMesh) {
-                    const ratio = Math.max(0, res.stamina / res.maxStamina);
-                    p.fillMesh.scale.x = ratio;
-                    if (res.staminaColor) {
-                        p.fillMesh.material.color.setHex(res.staminaColor);
-                    } else {
-                        p.fillMesh.material.color.setHex(ratio > 0.5 ? 0x4caf50 : (ratio > 0.2 ? 0xffc107 : 0xf44336));
-                    }
-                }
-
-                // 4. 若球員觸發踢球
-                if (res.didKick) {
-                    const forwardX = Math.sin(p.mesh.rotation.y);
-                    const forwardZ = Math.cos(p.mesh.rotation.y);
-                    velocity.x += forwardX * (res.kickForce / mass) * 0.15;
-                    velocity.y += (res.kickAngleY || 3.5) / mass;
-                    velocity.z += forwardZ * (res.kickForce / mass) * 0.15;
-
-                    // 若是在開球狀態下且為擁有球權的隊伍開球，踢出後視為已重新開球
-                    if (!window.matchState.restarted && window.matchState.canKick && p.ai.team === window.matchState.possession) {
-                        window.matchState.restarted = true;
-                    }
-                }
-
-                // 5. 組裝即時儀表板內容
-                const teamTag = (p.ai.team === 'red') ? '<span style="color:#ff5252;">[紅隊]</span>' : '<span style="color:#42a5f5;">[藍隊]</span>';
-                dashHTML += `
-                    <div style="border-bottom:1px solid #333; padding-bottom:6px; margin-bottom:6px;">
-                        <div style="font-weight:bold; color:#fff;">${teamTag} ${p.name}</div>
-                        <div class="stat-row"><span class="stat-label">體能血條:</span><span class="stat-value">${res.stamina.toFixed(1)}%</span></div>
-                        <div class="stat-row"><span class="stat-label">狀態:</span><span class="stat-value" style="color:${res.statusColor}">${res.statusText}</span></div>
-                    </div>
-                `;
-            });
-
+            updateKickoffPermission();
+            document.getElementById('kickoff-status').textContent =
+                `可以開球=${matchState.canKickoff}｜已重新開球=${matchState.restarted}｜球權=${matchState.possession}`;
             dashboardList.innerHTML = dashHTML;
 
             // --- 足球物理運動計算 ---
@@ -635,18 +685,10 @@
             // 進球判斷
             if (ball.position.x <= -boxWidth / 2 + ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
                 scoreRight++; scoreRightEl.textContent = scoreRight;
-                // 左門失守 (紅隊被進球)，球權歸紅隊，重置開球狀態
-                window.matchState.restarted = false;
-                window.matchState.possession = 'red';
-                window.matchState.canKick = false;
-                resetBall();
+                beginKickoff('red');
             } else if (ball.position.x >= boxWidth / 2 - ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
                 scoreLeft++; scoreLeftEl.textContent = scoreLeft;
-                // 右門失守 (藍隊被進球)，球權歸藍隊，重置開球狀態
-                window.matchState.restarted = false;
-                window.matchState.possession = 'blue';
-                window.matchState.canKick = false;
-                resetBall();
+                beginKickoff('blue');
             } else {
                 if (ball.position.x > maxX) { ball.position.x = maxX; velocity.x = -velocity.x; }
                 else if (ball.position.x < -maxX) { ball.position.x = -maxX; velocity.x = -velocity.x; }
