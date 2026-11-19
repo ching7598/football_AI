@@ -1,4 +1,12 @@
 
+/*
+BRAIN_PROFILE_START
+{
+  "name": "基礎AI"
+}
+BRAIN_PROFILE_END
+*/
+
 /* Brain runs inside a dedicated Web Worker.
    No DOM/Three.js/player mesh access. */
 (function () {

@@ -1,7 +1,7 @@
 /*
 PHYSICAL_PROFILE_START
 {
-  "name": "標準藍隊球員",
+  "name": "標準身形",
   "height": 180,
   "weight": 80,
   "maxRunSpeed": 7,

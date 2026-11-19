@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -198,7 +199,7 @@
     <!-- Three.js and OrbitControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    
+
     <!-- 載入球員共通規則與基礎類別 -->
     <script src="human_law.js"></script>
     <!-- 球員大腦在獨立 Worker 執行；不再載入 player0.js -->
@@ -297,6 +298,7 @@
 
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
         dirLight.position.set(40, 80, 50);
+
         dirLight.castShadow = true;
         scene.add(dirLight);
 
@@ -447,6 +449,19 @@
             if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('身體設定必須是 JSON 物件');
             return { name: String(data.name || '球員').slice(0, 40), physical: RULES.physical(data) };
         }
+        // 大腦名稱放在註解中的 JSON 設定區，不會執行 JS 原始碼。
+        // 未提供名稱的舊版大腦仍可使用。
+        function parseBrainSource(source, filename = '') {
+            const match = source.match(/BRAIN_PROFILE_START\s*([\s\S]*?)\s*BRAIN_PROFILE_END/);
+            if (match) {
+                const data = JSON.parse(match[1]);
+                if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                    throw new Error('大腦設定必須是 JSON 物件');
+                }
+                return { name: String(data.name || '未命名AI').slice(0, 40) };
+            }
+            return { name: filename ? filename.replace(/\.js$/i, '') : '未命名AI' };
+        }
         function readFile(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -504,12 +519,13 @@
                 if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > 51.5 || Math.abs(z) > 33)
                     throw new Error('回防座標超出球場範圍');
                 const parsed = parsePhysicalSource(physicalSource);
+                const brain = parseBrainSource(brainSource, brainInput.files[0]?.name || 'brain_0.js');
                 const blob = new Blob([brainSource], { type: 'text/javascript' });
                 const url = URL.createObjectURL(blob);
                 let worker;
                 try { worker = new Worker(url); } finally { URL.revokeObjectURL(url); }
                 const id = nextPlayerId++;
-                const name = parsed.name + ' #' + id;
+                const name = `${parsed.name} + ${brain.name} #${id}`;
                 const model = spawnPlayerModel(team, x, z, name);
                 const player = {
                     id, name, team, mesh: model.group, fillMesh: model.fillMesh, worker,
@@ -537,40 +553,109 @@
         function observe(player) {
             const s = player.state;
             const forward = { x: Math.sin(s.facing), z: Math.cos(s.facing) };
+
             function visible(pos) {
-                const dx = pos.x - s.position.x, dz = pos.z - s.position.z;
+                const dx = pos.x - s.position.x;
+                const dz = pos.z - s.position.z;
                 const dist = Math.hypot(dx, dz);
-                return dist < 0.01 || (dx * forward.x + dz * forward.z) / dist >= Math.cos(RULES.SETTINGS.fovRadians / 2);
+
+                return dist < 0.01 ||
+                    (dx * forward.x + dz * forward.z) / dist >=
+                    Math.cos(RULES.SETTINGS.fovRadians / 2);
             }
+
             const objects = [];
-            if (visible(ball.position)) objects.push({ id: 'ball', type: 'ball',
-                position: { x: ball.position.x, y: ball.position.y, z: ball.position.z },
-                velocity: { x: velocity.x, y: velocity.y, z: velocity.z },
-                acceleration: { x: 0, y: gravity, z: 0 } });
+
+            if (visible(ball.position)) {
+                objects.push({
+                    id: 'ball',
+                    type: 'ball',
+                    position: {
+                        x: ball.position.x,
+                        y: ball.position.y,
+                        z: ball.position.z
+                    },
+                    velocity: {
+                        x: velocity.x,
+                        y: velocity.y,
+                        z: velocity.z
+                    },
+                    acceleration: {
+                        x: 0,
+                        y: gravity,
+                        z: 0
+                    }
+                });
+            }
+
             for (const other of activePlayers) {
-                if (other === player || !visible(other.state.position)) continue;
-                objects.push({ id: 'player_' + other.id, type: 'player', team: other.team,
-                    position: { ...other.state.position }, velocity: { ...other.state.velocity },
-                    acceleration: { x: 0, z: 0 } });
+                if (other === player || !visible(other.state.position)) {
+                    continue;
+                }
+
+                objects.push({
+                    id: 'player_' + other.id,
+                    type: 'player',
+                    team: other.team,
+                    position: { ...other.state.position },
+                    velocity: { ...other.state.velocity },
+                    acceleration: { x: 0, z: 0 }
+                });
             }
-            for (const [id, goal, team] of [['leftGoal', leftGoal, 'red'], ['rightGoal', rightGoal, 'blue']]) {
-                if (visible(goal.position)) objects.push({ id, type: 'goal', team,
-                    position: { x: goal.position.x, y: 0, z: goal.position.z },
-                    velocity: { x: 0, y: 0, z: 0 }, acceleration: { x: 0, y: 0, z: 0 } });
+
+            for (const [id, goal, team] of [
+                ['leftGoal', leftGoal, 'red'],
+                ['rightGoal', rightGoal, 'blue']
+            ]) {
+                if (visible(goal.position)) {
+                    objects.push({
+                        id,
+                        type: 'goal',
+                        team,
+                        position: {
+                            x: goal.position.x,
+                            y: 0,
+                            z: goal.position.z
+                        },
+                        velocity: { x: 0, y: 0, z: 0 },
+                        acceleration: { x: 0, y: 0, z: 0 }
+                    });
+                }
             }
-            return { self: { id: player.id, team: player.team,
-                    position: { ...s.position }, velocity: { ...s.velocity }, facing: s.facing,
-                    stamina: s.stamina, maxStamina: player.physical.maxStamina, resting: s.restTimer > 0 },
+
+            return {
+                self: {
+                    id: player.id,
+                    team: player.team,
+                    position: { ...s.position },
+                    velocity: { ...s.velocity },
+                    facing: s.facing,
+                    stamina: s.stamina,
+                    maxStamina: player.physical.maxStamina,
+                    resting: s.restTimer > 0
+                },
                 visibleObjects: objects,
                 defensePosition: { ...player.defensePosition },
                 assignedPosition: { ...player.assignedPosition },
-                matchState: { ...matchState } };
+                matchState: { ...matchState }
+            };
         }
 
         // UI 與儀表板更新
-        const rangeFx = document.getElementById('range-fx'), rangeFy = document.getElementById('range-fy'), rangeFz = document.getElementById('range-fz'), rangeMass = document.getElementById('range-mass');
-        const valFx = document.getElementById('val-fx'), valFy = document.getElementById('val-fy'), valFz = document.getElementById('val-fz'), valMass = document.getElementById('val-mass'), valMassKg = document.getElementById('val-mass-kg');
-        const scoreLeftEl = document.getElementById('score-left'), scoreRightEl = document.getElementById('score-right'), btnResetScore = document.getElementById('btn-reset-score');
+        const rangeFx = document.getElementById('range-fx');
+        const rangeFy = document.getElementById('range-fy');
+        const rangeFz = document.getElementById('range-fz');
+        const rangeMass = document.getElementById('range-mass');
+
+        const valFx = document.getElementById('val-fx');
+        const valFy = document.getElementById('val-fy');
+        const valFz = document.getElementById('val-fz');
+        const valMass = document.getElementById('val-mass');
+        const valMassKg = document.getElementById('val-mass-kg');
+
+        const scoreLeftEl = document.getElementById('score-left');
+        const scoreRightEl = document.getElementById('score-right');
+        const btnResetScore = document.getElementById('btn-reset-score');
         const dashboardList = document.getElementById('players-dashboard-list');
 
         function updateUI() {
@@ -578,22 +663,32 @@
             valFy.textContent = parseFloat(rangeFy.value).toFixed(1);
             valFz.textContent = parseFloat(rangeFz.value).toFixed(1);
             valMass.textContent = rangeMass.value;
-            valMassKg.textContent = (parseInt(rangeMass.value) * 0.01).toFixed(2);
+            valMassKg.textContent =
+                (parseInt(rangeMass.value) * 0.01).toFixed(2);
         }
-        [rangeFx, rangeFy, rangeFz, rangeMass].forEach(input => input.addEventListener('input', updateUI));
+
+        [rangeFx, rangeFy, rangeFz, rangeMass].forEach(input => {
+            input.addEventListener('input', updateUI);
+        });
+
         updateUI();
 
         btnResetScore.addEventListener('click', () => {
-            scoreLeft = 0; scoreRight = 0;
-            scoreLeftEl.textContent = 0; scoreRightEl.textContent = 0;
+            scoreLeft = 0;
+            scoreRight = 0;
+            scoreLeftEl.textContent = 0;
+            scoreRightEl.textContent = 0;
         });
 
         document.getElementById('btn-apply').addEventListener('click', () => {
             if (!matchState.restarted) {
-                loadStatus.textContent = '等待重新開球：暫時禁止手動對球施力';
+                loadStatus.textContent =
+                    '等待重新開球：暫時禁止手動對球施力';
                 return;
             }
+
             const m = parseInt(rangeMass.value) * 0.01;
+
             velocity.x += (parseFloat(rangeFx.value) / m) * 0.1;
             velocity.y += (parseFloat(rangeFy.value) / m) * 0.1;
             velocity.z += (parseFloat(rangeFz.value) / m) * 0.1;
@@ -608,96 +703,258 @@
 
         function animate() {
             requestAnimationFrame(animate);
+
             let dt = clock.getDelta();
             if (dt > 0.1) dt = 0.1;
 
             const mass = parseInt(rangeMass.value) * 0.01;
             let dashHTML = "";
 
-            // AI 在 Worker 中非同步思考；主程式只接受意圖並依人體規則執行。
+            // AI 在 Worker 中非同步思考；
+            // 主程式只接受意圖並依人體規則執行。
             updateKickoffPermission();
+
             for (const p of activePlayers) {
                 if (!p.pending) {
                     p.pending = true;
                     p.seq++;
-                    p.worker.postMessage({ type: 'decide', id: p.seq, dt, observation: observe(p) });
+
+                    p.worker.postMessage({
+                        type: 'decide',
+                        id: p.seq,
+                        dt,
+                        observation: observe(p)
+                    });
                 }
-                // 即使 Brain 嘗試作弊，開球前也只能由有球權隊在允許時踢球。
-                const canKick = matchState.restarted ||
-                    (matchState.canKickoff && matchState.possession === p.team);
+
+                // 即使 Brain 嘗試作弊，開球前也只能由
+                // 有球權隊在允許時踢球。
+                const canKick =
+                    matchState.restarted ||
+                    (
+                        matchState.canKickoff &&
+                        matchState.possession === p.team
+                    );
+
                 const wish = p.wish && !canKick
-                    ? { ...p.wish, kick: { x: 0, y: 0, z: 0 } } : p.wish;
-                const result = RULES.advance(p, wish, dt, ball.position, velocity, mass, fieldInfo);
-                if (result.kicked && !matchState.restarted && canKick) {
+                    ? {
+                        ...p.wish,
+                        kick: { x: 0, y: 0, z: 0 }
+                    }
+                    : p.wish;
+
+                const result = RULES.advance(
+                    p,
+                    wish,
+                    dt,
+                    ball.position,
+                    velocity,
+                    mass,
+                    fieldInfo
+                );
+
+                if (
+                    result.kicked &&
+                    !matchState.restarted &&
+                    canKick
+                ) {
                     matchState.restarted = true;
                     matchState.canKickoff = false;
                 }
-                p.mesh.position.set(p.state.position.x, 0, p.state.position.z);
+
+                p.mesh.position.set(
+                    p.state.position.x,
+                    0,
+                    p.state.position.z
+                );
+
                 p.mesh.rotation.y = p.state.facing;
-                if (p.mesh.children[6]) p.mesh.children[6].quaternion.copy(camera.quaternion);
-                const ratio = p.state.stamina / p.physical.maxStamina;
-                p.fillMesh.scale.x = Math.max(0, Math.min(1, ratio));
-                p.fillMesh.material.color.setHex(ratio > 0.5 ? 0x4caf50 : ratio > 0.2 ? 0xffc107 : 0xf44336);
-                const teamTag = p.team === 'red' ? '[紅隊]' : '[藍隊]';
-                const status = result.resting ? '喘氣中' : p.status;
-                // textContent-style escaping for names/status shown in HTML template
-                const safe = t => String(t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-                dashHTML += `<div style="border-bottom:1px solid #333;padding:6px">
-                    <b>${teamTag} ${safe(p.name)}</b><div>體能：${p.state.stamina.toFixed(0)} / ${p.physical.maxStamina.toFixed(0)}</div>
-                    <div>狀態：${safe(status)}</div><div>速度：${Math.hypot(p.state.velocity.x, p.state.velocity.z).toFixed(2)} m/s</div>
-                    </div>`;
+
+                if (p.mesh.children[6]) {
+                    p.mesh.children[6].quaternion.copy(
+                        camera.quaternion
+                    );
+                }
+
+                const ratio =
+                    p.state.stamina / p.physical.maxStamina;
+
+                p.fillMesh.scale.x =
+                    Math.max(0, Math.min(1, ratio));
+
+                p.fillMesh.material.color.setHex(
+                    ratio > 0.5
+                        ? 0x4caf50
+                        : ratio > 0.2
+                            ? 0xffc107
+                            : 0xf44336
+                );
+
+                const teamTag =
+                    p.team === 'red' ? '[紅隊]' : '[藍隊]';
+
+                const status =
+                    result.resting ? '喘氣中' : p.status;
+
+                // 避免名稱與狀態中的特殊字元被解讀成 HTML
+                const safe = t =>
+                    String(t).replace(
+                        /[&<>"']/g,
+                        c => ({
+                            '&': '&amp;',
+                            '<': '&lt;',
+                            '>': '&gt;',
+                            '"': '&quot;',
+                            "'": '&#39;'
+                        }[c])
+                    );
+
+                dashHTML += `
+                    <div style="border-bottom:1px solid #333;padding:6px">
+                        <b>${teamTag} ${safe(p.name)}</b>
+                        <div>
+                            體能：${p.state.stamina.toFixed(0)}
+                            / ${p.physical.maxStamina.toFixed(0)}
+                        </div>
+                        <div>狀態：${safe(status)}</div>
+                        <div>
+                            速度：${Math.hypot(
+                                p.state.velocity.x,
+                                p.state.velocity.z
+                            ).toFixed(2)} m/s
+                        </div>
+                    </div>
+                `;
             }
-            // 在平面上對所有球員兩兩進行質量相關的彈性碰撞。
-            for (let i = 0; i < activePlayers.length; i++)
-                for (let j = i + 1; j < activePlayers.length; j++)
-                    RULES.collide(activePlayers[i], activePlayers[j]);
+
+            // 球員兩兩碰撞
+            for (let i = 0; i < activePlayers.length; i++) {
+                for (
+                    let j = i + 1;
+                    j < activePlayers.length;
+                    j++
+                ) {
+                    RULES.collide(
+                        activePlayers[i],
+                        activePlayers[j]
+                    );
+                }
+            }
+
             for (const p of activePlayers) {
-                p.state.position.x = Math.max(-boxWidth/2 + p.physical.bodyRadius,
-                    Math.min(boxWidth/2 - p.physical.bodyRadius, p.state.position.x));
-                p.state.position.z = Math.max(-boxDepth/2 + p.physical.bodyRadius,
-                    Math.min(boxDepth/2 - p.physical.bodyRadius, p.state.position.z));
-                p.mesh.position.set(p.state.position.x, 0, p.state.position.z);
+                p.state.position.x = Math.max(
+                    -boxWidth / 2 + p.physical.bodyRadius,
+                    Math.min(
+                        boxWidth / 2 - p.physical.bodyRadius,
+                        p.state.position.x
+                    )
+                );
+
+                p.state.position.z = Math.max(
+                    -boxDepth / 2 + p.physical.bodyRadius,
+                    Math.min(
+                        boxDepth / 2 - p.physical.bodyRadius,
+                        p.state.position.z
+                    )
+                );
+
+                p.mesh.position.set(
+                    p.state.position.x,
+                    0,
+                    p.state.position.z
+                );
             }
 
             updateKickoffPermission();
+
             document.getElementById('kickoff-status').textContent =
-                `可以開球=${matchState.canKickoff}｜已重新開球=${matchState.restarted}｜球權=${matchState.possession}`;
+                `可以開球=${matchState.canKickoff}｜` +
+                `已重新開球=${matchState.restarted}｜` +
+                `球權=${matchState.possession}`;
+
             dashboardList.innerHTML = dashHTML;
 
             // --- 足球物理運動計算 ---
             acceleration.set(0, gravity, 0);
+
             velocity.x += acceleration.x * dt;
             velocity.y += acceleration.y * dt;
             velocity.z += acceleration.z * dt;
 
-            if (Math.abs(ball.position.y - ballRadius) < 0.05) {
-                velocity.x *= Math.pow(frictionCoefficient, dt * 60);
-                velocity.z *= Math.pow(frictionCoefficient, dt * 60);
+            if (
+                Math.abs(ball.position.y - ballRadius) < 0.05
+            ) {
+                velocity.x *= Math.pow(
+                    frictionCoefficient,
+                    dt * 60
+                );
+
+                velocity.z *= Math.pow(
+                    frictionCoefficient,
+                    dt * 60
+                );
             }
 
             ball.position.x += velocity.x * dt;
             ball.position.y += velocity.y * dt;
             ball.position.z += velocity.z * dt;
 
-            const maxX = boxWidth / 2 - ballRadius, maxZ = boxDepth / 2 - ballRadius;
-            const minY = ballRadius, maxY = boxHeight - ballRadius;
+            const maxX = boxWidth / 2 - ballRadius;
+            const maxZ = boxDepth / 2 - ballRadius;
+            const minY = ballRadius;
+            const maxY = boxHeight - ballRadius;
 
             // 進球判斷
-            if (ball.position.x <= -boxWidth / 2 + ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
-                scoreRight++; scoreRightEl.textContent = scoreRight;
+            if (
+                ball.position.x <= -boxWidth / 2 + ballRadius &&
+                ball.position.y <= goalHeight &&
+                Math.abs(ball.position.z) <= goalWidth / 2
+            ) {
+                scoreRight++;
+                scoreRightEl.textContent = scoreRight;
                 beginKickoff('red');
-            } else if (ball.position.x >= boxWidth / 2 - ballRadius && ball.position.y <= goalHeight && Math.abs(ball.position.z) <= goalWidth / 2) {
-                scoreLeft++; scoreLeftEl.textContent = scoreLeft;
+
+            } else if (
+                ball.position.x >= boxWidth / 2 - ballRadius &&
+                ball.position.y <= goalHeight &&
+                Math.abs(ball.position.z) <= goalWidth / 2
+            ) {
+                scoreLeft++;
+                scoreLeftEl.textContent = scoreLeft;
                 beginKickoff('blue');
+
             } else {
-                if (ball.position.x > maxX) { ball.position.x = maxX; velocity.x = -velocity.x; }
-                else if (ball.position.x < -maxX) { ball.position.x = -maxX; velocity.x = -velocity.x; }
+                if (ball.position.x > maxX) {
+                    ball.position.x = maxX;
+                    velocity.x = -velocity.x;
+
+                } else if (ball.position.x < -maxX) {
+                    ball.position.x = -maxX;
+                    velocity.x = -velocity.x;
+                }
             }
 
-            if (ball.position.z > maxZ) { ball.position.z = maxZ; velocity.z = -velocity.z; }
-            else if (ball.position.z < -maxZ) { ball.position.z = -maxZ; velocity.z = -velocity.z; }
-            if (ball.position.y > maxY) { ball.position.y = maxY; velocity.y = -velocity.y; }
-            if (ball.position.y < minY) { ball.position.y = minY; velocity.y = -velocity.y * restitutionFloor; if (Math.abs(velocity.y) < 0.2) velocity.y = 0; }
+            if (ball.position.z > maxZ) {
+                ball.position.z = maxZ;
+                velocity.z = -velocity.z;
+
+            } else if (ball.position.z < -maxZ) {
+                ball.position.z = -maxZ;
+                velocity.z = -velocity.z;
+            }
+
+            if (ball.position.y > maxY) {
+                ball.position.y = maxY;
+                velocity.y = -velocity.y;
+
+            } else if (ball.position.y < minY) {
+                ball.position.y = minY;
+                velocity.y = -velocity.y * restitutionFloor;
+
+                if (Math.abs(velocity.y) < 0.2) {
+                    velocity.y = 0;
+                }
+            }
 
             controls.update();
             renderer.render(scene, camera);
@@ -706,9 +963,15 @@
         animate();
 
         window.addEventListener('resize', () => {
-            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.aspect =
+                container.clientWidth / container.clientHeight;
+
             camera.updateProjectionMatrix();
-            renderer.setSize(container.clientWidth, container.clientHeight);
+
+            renderer.setSize(
+                container.clientWidth,
+                container.clientHeight
+            );
         });
     </script>
 </body>
