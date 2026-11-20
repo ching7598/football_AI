@@ -510,12 +510,24 @@
               validateLoadForm();
           }).catch(() => { loadStatus.textContent = '請選取 brain_0.js 與 physical_0.js（直接開啟 HTML 時需手動選檔）'; });
 
-        loadBtn.addEventListener('click', () => {
-            try {
-                if (!brainSource || !physicalSource) throw new Error('請先選擇大腦和身體檔案');
-                const team = document.querySelector('input[name="team-choice"]:checked').value;
-                const x = Number(document.getElementById('defense-x').value);
-                const z = Number(document.getElementById('defense-z').value);
+	loadBtn.addEventListener('click', () => {
+		try {
+			if (!brainSource || !physicalSource) throw new Error('請先選擇大腦和身體檔案');
+
+				const team = document.querySelector('input[name="team-choice"]:checked').value;
+
+				const defenseXInput = document.getElementById('defense-x');
+
+        // 藍隊 X 為正數，紅隊 X 為負數
+				const rawX = Number(defenseXInput.value);
+				const x = team === 'blue'
+					? Math.abs(rawX)
+					: -Math.abs(rawX);
+
+        // 更新畫面上的回防 X
+				defenseXInput.value = x;
+
+				const z = Number(document.getElementById('defense-z').value);
                 if (!Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > 51.5 || Math.abs(z) > 33)
                     throw new Error('回防座標超出球場範圍');
                 const parsed = parsePhysicalSource(physicalSource);
