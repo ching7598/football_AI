@@ -252,6 +252,7 @@
         </div>
 
         <button id="btn-apply">🚀 手動施力 (Apply Force)</button>
+        <button id="btn-pause" style="background:#e68a00">⏸ 暫停遊戲</button>
 
         <div class="scoreboard-panel">
             <h3>即時記分板</h3>
@@ -693,6 +694,7 @@
         });
 
         document.getElementById('btn-apply').addEventListener('click', () => {
+            if (isPaused) return;
             if (!matchState.restarted) {
                 loadStatus.textContent =
                     '等待重新開球：暫時禁止手動對球施力';
@@ -711,12 +713,30 @@
             velocity.set(0, 0, 0);
         }
 
+        let isPaused = false;
+        const pauseBtn = document.getElementById('btn-pause');
+        pauseBtn.addEventListener('click', () => {
+            isPaused = !isPaused;
+            pauseBtn.textContent = isPaused ? '▶ 繼續遊戲' : '⏸ 暫停遊戲';
+            pauseBtn.style.background = isPaused ? '#4CAF50' : '#e68a00';
+            document.getElementById('btn-apply').disabled = isPaused;
+        });
         let clock = new THREE.Clock();
 
         function animate() {
             requestAnimationFrame(animate);
 
             let dt = clock.getDelta();
+            if (isPaused) {
+                controls.update();
+                for (const p of activePlayers) {
+                    if (p.mesh.children[6]) {
+                        p.mesh.children[6].quaternion.copy(camera.quaternion);
+                    }
+                }
+                renderer.render(scene, camera);
+                return;
+            }
             if (dt > 0.1) dt = 0.1;
 
             const mass = parseInt(rangeMass.value) * 0.01;
@@ -919,6 +939,7 @@
             // 進球判斷
             if (
                 ball.position.x <= -boxWidth / 2 + ballRadius &&
+                velocity.x < 0 &&
                 ball.position.y <= goalHeight &&
                 Math.abs(ball.position.z) <= goalWidth / 2
             ) {
@@ -928,6 +949,7 @@
 
             } else if (
                 ball.position.x >= boxWidth / 2 - ballRadius &&
+                velocity.x > 0 &&
                 ball.position.y <= goalHeight &&
                 Math.abs(ball.position.z) <= goalWidth / 2
             ) {
@@ -935,24 +957,15 @@
                 scoreLeftEl.textContent = scoreLeft;
                 beginKickoff('blue');
 
-            } else {
-                if (ball.position.x > maxX) {
-                    ball.position.x = maxX;
-                    velocity.x = -velocity.x;
-
-                } else if (ball.position.x < -maxX) {
-                    ball.position.x = -maxX;
-                    velocity.x = -velocity.x;
-                }
-            }
-
-            if (ball.position.z > maxZ) {
-                ball.position.z = maxZ;
-                velocity.z = -velocity.z;
-
-            } else if (ball.position.z < -maxZ) {
-                ball.position.z = -maxZ;
-                velocity.z = -velocity.z;
+            } else if (
+                ball.position.x > maxX || ball.position.x < -maxX ||
+                ball.position.z > maxZ || ball.position.z < -maxZ
+            ) {
+                // 側牆碰撞：將球放在對應的地面邊界，不再反彈。
+                ball.position.x = THREE.MathUtils.clamp(ball.position.x, -maxX, maxX);
+                ball.position.z = THREE.MathUtils.clamp(ball.position.z, -maxZ, maxZ);
+                ball.position.y = minY;
+                velocity.set(0, 0, 0);
             }
 
             if (ball.position.y > maxY) {
